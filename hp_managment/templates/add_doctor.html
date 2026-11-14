@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="form-box">
+
+    <h2>Add Doctor</h2>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Username</label>
+        <input type="text" name="username" required>
+
+        <label>Email</label>
+        <input type="email" name="email" required>
+
+        <label>Password (minimum 8 characters)</label>
+        <input type="password" name="password"
+               minlength="8" required>
+
+        <label>Specialization</label>
+        <input type="text" name="specialization" required>
+
+        <label>Phone</label>
+        <input type="tel" name="phone" required>
+
+        <button type="submit">Add Doctor</button>
+    </form>
+
+</div>
+
+{% endblock %}

@@ -1,0 +1,1469 @@
+hospital/
+│
+├── manage.py
+│
+├── hospital/
+│   ├── settings.py
+│   ├── urls.py
+│
+├── management/
+│   ├── migrations/
+│   ├── models.py
+│   ├── views.py
+│   ├── urls.py
+│   ├── admin.py
+│   └── apps.py
+│
+├── templates/
+│   ├── base.html
+│   ├── login.html
+│   ├── register.html
+│   ├── admin_dashboard.html
+│   ├── doctor_dashboard.html
+│   ├── patient_dashboard.html
+│   ├── add_doctor.html
+│   └── book_appointment.html
+│
+└── static/
+    ├── css/
+    │   └── style.css
+    └── js/
+        └── script.js
+
+
+
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+
+    'management',
+]
+
+
+
+
+
+
+'DIRS': [BASE_DIR / 'templates'],
+
+
+
+
+
+STATIC_URL = 'static/'
+
+STATICFILES_DIRS = [
+    BASE_DIR / 'static',
+]
+
+LOGIN_URL = 'login'
+
+
+
+
+
+
+
+
+
+>>>> management/models.py
+
+
+from django.db import models
+from django.contrib.auth.models import User
+
+
+class Doctor(models.Model):
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE
+    )
+    specialization = models.CharField(max_length=100)
+    phone = models.CharField(max_length=15)
+
+    def __str__(self):
+        return self.user.username
+
+
+class Patient(models.Model):
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE
+    )
+    age = models.IntegerField()
+    gender = models.CharField(max_length=20)
+    phone = models.CharField(max_length=15)
+    address = models.TextField()
+
+    def __str__(self):
+        return self.user.username
+
+
+class Appointment(models.Model):
+
+    STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
+        ('Completed', 'Completed'),
+        ('Cancelled', 'Cancelled'),
+    ]
+
+    patient = models.ForeignKey(
+        Patient, on_delete=models.CASCADE
+    )
+
+    doctor = models.ForeignKey(
+        Doctor, on_delete=models.CASCADE
+    )
+
+    appointment_date = models.DateField()
+    reason = models.TextField()
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='Pending'
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.patient} - {self.doctor}"
+
+
+
+
+
+
+
+
+
+
+>>> Admin.py
+
+
+from django.contrib import admin
+from .models import Doctor, Patient, Appointment
+
+admin.site.register(Doctor)
+admin.site.register(Patient)
+admin.site.register(Appointment)
+
+
+
+
+
+
+
+
+>>> management/views.py
+
+
+
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.models import User
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib import messages
+from django.views.decorators.http import require_POST
+from django.utils import timezone
+
+from .models import Doctor, Patient, Appointment
+
+
+# ROLE CHECKING
+
+def is_admin(user):
+    return user.is_authenticated and user.is_staff
+
+
+def is_doctor(user):
+    return user.is_authenticated and hasattr(user, 'doctor')
+
+
+def is_patient(user):
+    return user.is_authenticated and hasattr(user, 'patient')
+
+
+# HOME
+
+def home(request):
+    if request.user.is_authenticated:
+        if request.user.is_staff:
+            return redirect('admin_dashboard')
+        if hasattr(request.user, 'doctor'):
+            return redirect('doctor_dashboard')
+        if hasattr(request.user, 'patient'):
+            return redirect('patient_dashboard')
+
+    return redirect('login')
+
+
+# PATIENT REGISTRATION
+
+def register(request):
+
+    if request.method == 'POST':
+
+        username = request.POST.get('username', '').strip()
+        email = request.POST.get('email', '').strip()
+        password = request.POST.get('password', '')
+        age = request.POST.get('age')
+        gender = request.POST.get('gender')
+        phone = request.POST.get('phone', '').strip()
+        address = request.POST.get('address', '').strip()
+
+        if not all([username, email, password, age,
+                    gender, phone, address]):
+            messages.error(request, 'Please fill all fields.')
+            return redirect('register')
+
+        if len(password) < 8:
+            messages.error(request, 'Password must have at least 8 characters.')
+            return redirect('register')
+
+        try:
+            age = int(age)
+            if age < 1 or age > 120:
+                raise ValueError
+        except ValueError:
+            messages.error(request, 'Enter a valid age.')
+            return redirect('register')
+
+        if User.objects.filter(username=username).exists():
+            messages.error(request, 'Username already exists.')
+            return redirect('register')
+
+        if User.objects.filter(email=email).exists():
+            messages.error(request, 'Email already exists.')
+            return redirect('register')
+
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password
+        )
+
+        Patient.objects.create(
+            user=user,
+            age=age,
+            gender=gender,
+            phone=phone,
+            address=address
+        )
+
+        messages.success(request, 'Registration successful. Please login.')
+        return redirect('login')
+
+    return render(request, 'register.html')
+
+
+# LOGIN
+
+def user_login(request):
+
+    if request.user.is_authenticated:
+        return home(request)
+
+    if request.method == 'POST':
+
+        username = request.POST.get('username', '').strip()
+        password = request.POST.get('password', '')
+
+        user = authenticate(
+            request,
+            username=username,
+            password=password
+        )
+
+        if user is not None:
+
+            if user.is_staff:
+                login(request, user)
+                return redirect('admin_dashboard')
+
+            elif hasattr(user, 'doctor'):
+                login(request, user)
+                return redirect('doctor_dashboard')
+
+            elif hasattr(user, 'patient'):
+                login(request, user)
+                return redirect('patient_dashboard')
+
+            messages.error(request, 'User role not configured.')
+
+        else:
+            messages.error(request, 'Invalid username or password.')
+
+    return render(request, 'login.html')
+
+
+# LOGOUT
+
+@login_required
+def user_logout(request):
+    logout(request)
+    return redirect('login')
+
+
+# ADMIN DASHBOARD
+
+@login_required
+@user_passes_test(is_admin)
+def admin_dashboard(request):
+
+    doctors = Doctor.objects.select_related('user').all()
+    patients = Patient.objects.select_related('user').all()
+
+    appointments = Appointment.objects.select_related(
+        'patient__user',
+        'doctor__user'
+    ).order_by('-created_at')
+
+    context = {
+        'doctors': doctors,
+        'patients': patients,
+        'appointments': appointments,
+        'doctor_count': doctors.count(),
+        'patient_count': patients.count(),
+        'appointment_count': appointments.count(),
+    }
+
+    return render(
+        request,
+        'admin_dashboard.html',
+        context
+    )
+
+
+# ADD DOCTOR
+
+@login_required
+@user_passes_test(is_admin)
+def add_doctor(request):
+
+    if request.method == 'POST':
+
+        username = request.POST.get('username', '').strip()
+        email = request.POST.get('email', '').strip()
+        password = request.POST.get('password', '')
+        specialization = request.POST.get('specialization', '').strip()
+        phone = request.POST.get('phone', '').strip()
+
+        if not all([username, email, password,
+                    specialization, phone]):
+            messages.error(request, 'Please fill all fields.')
+            return redirect('add_doctor')
+
+        if len(password) < 8:
+            messages.error(request, 'Password must have at least 8 characters.')
+            return redirect('add_doctor')
+
+        if User.objects.filter(username=username).exists():
+            messages.error(request, 'Username already exists.')
+            return redirect('add_doctor')
+
+        if User.objects.filter(email=email).exists():
+            messages.error(request, 'Email already exists.')
+            return redirect('add_doctor')
+
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password
+        )
+
+        Doctor.objects.create(
+            user=user,
+            specialization=specialization,
+            phone=phone
+        )
+
+        messages.success(request, 'Doctor added successfully!')
+        return redirect('admin_dashboard')
+
+    return render(request, 'add_doctor.html')
+
+
+# DOCTOR DASHBOARD
+
+@login_required
+@user_passes_test(is_doctor)
+def doctor_dashboard(request):
+
+    doctor = get_object_or_404(
+        Doctor,
+        user=request.user
+    )
+
+    appointments = Appointment.objects.filter(
+        doctor=doctor
+    ).select_related(
+        'patient__user'
+    ).order_by('-appointment_date')
+
+    return render(
+        request,
+        'doctor_dashboard.html',
+        {'appointments': appointments}
+    )
+
+
+# UPDATE APPOINTMENT STATUS
+
+@login_required
+@user_passes_test(is_doctor)
+@require_POST
+def update_status(request, appointment_id):
+
+    doctor = get_object_or_404(
+        Doctor,
+        user=request.user
+    )
+
+    appointment = get_object_or_404(
+        Appointment,
+        id=appointment_id,
+        doctor=doctor
+    )
+
+    status = request.POST.get('status')
+
+    allowed_statuses = [
+        'Approved',
+        'Rejected',
+        'Completed'
+    ]
+
+    if status not in allowed_statuses:
+        messages.error(request, 'Invalid status.')
+        return redirect('doctor_dashboard')
+
+    if appointment.status != 'Pending':
+        messages.error(request, 'Only pending appointments can be updated.')
+        return redirect('doctor_dashboard')
+
+    appointment.status = status
+    appointment.save()
+
+    messages.success(request, 'Appointment status updated.')
+
+    return redirect('doctor_dashboard')
+
+
+# PATIENT DASHBOARD
+
+@login_required
+@user_passes_test(is_patient)
+def patient_dashboard(request):
+
+    patient = get_object_or_404(
+        Patient,
+        user=request.user
+    )
+
+    doctors = Doctor.objects.select_related('user').all()
+
+    appointments = Appointment.objects.filter(
+        patient=patient
+    ).select_related(
+        'doctor__user'
+    ).order_by('-created_at')
+
+    return render(
+        request,
+        'patient_dashboard.html',
+        {
+            'doctors': doctors,
+            'appointments': appointments
+        }
+    )
+
+
+# BOOK APPOINTMENT
+
+@login_required
+@user_passes_test(is_patient)
+def book_appointment(request):
+
+    doctors = Doctor.objects.select_related('user').all()
+
+    if request.method == 'POST':
+
+        doctor_id = request.POST.get('doctor')
+        date = request.POST.get('appointment_date')
+        reason = request.POST.get('reason', '').strip()
+
+        if not doctor_id or not date or not reason:
+            messages.error(request, 'Please fill all fields.')
+            return redirect('book_appointment')
+
+        try:
+            appointment_date = timezone.datetime.strptime(
+                date, '%Y-%m-%d'
+            ).date()
+        except ValueError:
+            messages.error(request, 'Invalid appointment date.')
+            return redirect('book_appointment')
+
+        if appointment_date < timezone.localdate():
+            messages.error(request, 'Select today or a future date.')
+            return redirect('book_appointment')
+
+        doctor = get_object_or_404(
+            Doctor,
+            id=doctor_id
+        )
+
+        patient = get_object_or_404(
+            Patient,
+            user=request.user
+        )
+
+        Appointment.objects.create(
+            patient=patient,
+            doctor=doctor,
+            appointment_date=appointment_date,
+            reason=reason
+        )
+
+        messages.success(request, 'Appointment booked successfully!')
+        return redirect('patient_dashboard')
+
+    return render(
+        request,
+        'book_appointment.html',
+        {'doctors': doctors}
+    )
+
+
+# CANCEL PENDING APPOINTMENT
+
+@login_required
+@user_passes_test(is_patient)
+@require_POST
+def cancel_appointment(request, appointment_id):
+
+    patient = get_object_or_404(
+        Patient,
+        user=request.user
+    )
+
+    appointment = get_object_or_404(
+        Appointment,
+        id=appointment_id,
+        patient=patient
+    )
+
+    if appointment.status == 'Pending':
+        appointment.status = 'Cancelled'
+        appointment.save()
+        messages.success(request, 'Appointment cancelled.')
+    else:
+        messages.error(
+            request,
+            'Only pending appointments can be cancelled.'
+        )
+
+    return redirect('patient_dashboard')
+
+
+.
+
+
+
+
+
+
+
+
+>>>>> management/urls.py
+
+
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('', views.home, name='home'),
+
+    path('login/', views.user_login, name='login'),
+    path('register/', views.register, name='register'),
+    path('logout/', views.user_logout, name='logout'),
+
+    path('admin-dashboard/',
+         views.admin_dashboard,
+         name='admin_dashboard'),
+
+    path('add-doctor/',
+         views.add_doctor,
+         name='add_doctor'),
+
+    path('doctor-dashboard/',
+         views.doctor_dashboard,
+         name='doctor_dashboard'),
+
+    path('update-status/<int:appointment_id>/',
+         views.update_status,
+         name='update_status'),
+
+    path('patient-dashboard/',
+         views.patient_dashboard,
+         name='patient_dashboard'),
+
+    path('book-appointment/',
+         views.book_appointment,
+         name='book_appointment'),
+
+    path('cancel-appointment/<int:appointment_id>/',
+         views.cancel_appointment,
+         name='cancel_appointment'),
+]
+
+
+
+
+
+
+
+
+
+
+
+>>>> hospital/urls.py
+
+
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('django-admin/', admin.site.urls),
+    path('', include('management.urls')),
+]
+
+
+
+
+
+
+
+>>>> base.html
+
+
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Hospital Management System</title>
+
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <script src="{% static 'js/script.js' %}" defer></script>
+</head>
+
+<body>
+
+<nav class="navbar">
+    <h2>HealthCare HMS</h2>
+
+    {% if user.is_authenticated %}
+    <div>
+        <span>{{ user.username }}</span>
+        <a href="{% url 'logout' %}" class="logout">Logout</a>
+    </div>
+    {% endif %}
+</nav>
+
+<div class="container">
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="message">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
+    {% block content %}
+    {% endblock %}
+
+</div>
+
+<footer>
+    Hospital Management System
+</footer>
+
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+>>>> login.html
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="form-box">
+
+    <h2>Login</h2>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Username</label>
+        <input type="text" name="username" required>
+
+        <label>Password</label>
+        <input type="password" name="password" required>
+
+        <button type="submit">Login</button>
+    </form>
+
+    <p>New patient?
+        <a href="{% url 'register' %}">Register here</a>
+    </p>
+
+</div>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+>>>>> register.html
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="form-box">
+
+    <h2>Patient Registration</h2>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Username</label>
+        <input type="text" name="username" required>
+
+        <label>Email</label>
+        <input type="email" name="email" required>
+
+        <label>Password (minimum 8 characters)</label>
+        <input type="password" name="password"
+               minlength="8" required>
+
+        <label>Age</label>
+        <input type="number" name="age" min="1" max="120" required>
+
+        <label>Gender</label>
+        <select name="gender" required>
+            <option value="">Select Gender</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Other">Other</option>
+        </select>
+
+        <label>Phone</label>
+        <input type="tel" name="phone" required>
+
+        <label>Address</label>
+        <textarea name="address" required></textarea>
+
+        <button type="submit">Register</button>
+    </form>
+
+    <p>Already registered?
+        <a href="{% url 'login' %}">Login</a>
+    </p>
+
+</div>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+
+>>>>> admin_dashboard.html
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Admin Dashboard</h1>
+
+<div class="cards">
+
+    <div class="card">
+        <h3>Total Doctors</h3>
+        <h2>{{ doctor_count }}</h2>
+    </div>
+
+    <div class="card">
+        <h3>Total Patients</h3>
+        <h2>{{ patient_count }}</h2>
+    </div>
+
+    <div class="card">
+        <h3>Total Appointments</h3>
+        <h2>{{ appointment_count }}</h2>
+    </div>
+
+</div>
+
+<a href="{% url 'add_doctor' %}" class="btn">
+    + Add Doctor
+</a>
+
+<h2>Doctor Details</h2>
+
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Specialization</th>
+        <th>Phone</th>
+    </tr>
+
+    {% for doctor in doctors %}
+    <tr>
+        <td>{{ doctor.user.username }}</td>
+        <td>{{ doctor.user.email }}</td>
+        <td>{{ doctor.specialization }}</td>
+        <td>{{ doctor.phone }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="4">No doctors found.</td></tr>
+    {% endfor %}
+</table>
+
+<h2>Patient Details</h2>
+
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Age</th>
+        <th>Gender</th>
+        <th>Phone</th>
+    </tr>
+
+    {% for patient in patients %}
+    <tr>
+        <td>{{ patient.user.username }}</td>
+        <td>{{ patient.user.email }}</td>
+        <td>{{ patient.age }}</td>
+        <td>{{ patient.gender }}</td>
+        <td>{{ patient.phone }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">No patients found.</td></tr>
+    {% endfor %}
+</table>
+
+<h2>All Appointments</h2>
+
+<table>
+    <tr>
+        <th>Patient</th>
+        <th>Doctor</th>
+        <th>Date</th>
+        <th>Reason</th>
+        <th>Status</th>
+    </tr>
+
+    {% for a in appointments %}
+    <tr>
+        <td>{{ a.patient.user.username }}</td>
+        <td>{{ a.doctor.user.username }}</td>
+        <td>{{ a.appointment_date }}</td>
+        <td>{{ a.reason }}</td>
+        <td>{{ a.status }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5">No appointments found.</td></tr>
+    {% endfor %}
+</table>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+>>>>> add_docter.html
+
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="form-box">
+
+    <h2>Add Doctor</h2>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Username</label>
+        <input type="text" name="username" required>
+
+        <label>Email</label>
+        <input type="email" name="email" required>
+
+        <label>Password (minimum 8 characters)</label>
+        <input type="password" name="password"
+               minlength="8" required>
+
+        <label>Specialization</label>
+        <input type="text" name="specialization" required>
+
+        <label>Phone</label>
+        <input type="tel" name="phone" required>
+
+        <button type="submit">Add Doctor</button>
+    </form>
+
+</div>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+>>>>>  patient_dashboard.html
+
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Patient Dashboard</h1>
+
+<h2>Available Doctors</h2>
+
+<table>
+    <tr>
+        <th>Doctor Name</th>
+        <th>Specialization</th>
+        <th>Phone</th>
+    </tr>
+
+    {% for doctor in doctors %}
+    <tr>
+        <td>{{ doctor.user.username }}</td>
+        <td>{{ doctor.specialization }}</td>
+        <td>{{ doctor.phone }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="3">No doctors available.</td></tr>
+    {% endfor %}
+</table>
+
+<a href="{% url 'book_appointment' %}" class="btn">
+    Book Appointment
+</a>
+
+<h2>My Appointments</h2>
+
+<table>
+    <tr>
+        <th>Doctor</th>
+        <th>Specialization</th>
+        <th>Date</th>
+        <th>Reason</th>
+        <th>Status</th>
+        <th>Action</th>
+    </tr>
+
+    {% for a in appointments %}
+    <tr>
+        <td>{{ a.doctor.user.username }}</td>
+        <td>{{ a.doctor.specialization }}</td>
+        <td>{{ a.appointment_date }}</td>
+        <td>{{ a.reason }}</td>
+        <td>{{ a.status }}</td>
+
+        <td>
+            {% if a.status == 'Pending' %}
+            <form method="POST"
+                  action="{% url 'cancel_appointment' a.id %}">
+                {% csrf_token %}
+                <button type="submit" class="danger">
+                    Cancel
+                </button>
+            </form>
+            {% endif %}
+        </td>
+    </tr>
+
+    {% empty %}
+    <tr><td colspan="6">No appointments found.</td></tr>
+    {% endfor %}
+</table>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+>>>>> book_appointment.html
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<div class="form-box">
+
+    <h2>Book Appointment</h2>
+
+    <form method="POST">
+        {% csrf_token %}
+
+        <label>Select Doctor</label>
+
+        <select name="doctor" required>
+            <option value="">Choose Doctor</option>
+
+            {% for doctor in doctors %}
+            <option value="{{ doctor.id }}">
+                {{ doctor.user.username }} -
+                {{ doctor.specialization }}
+            </option>
+            {% endfor %}
+        </select>
+
+        <label>Appointment Date</label>
+
+        <input type="date"
+               name="appointment_date"
+               id="appointment_date"
+               required>
+
+        <label>Reason for Visit</label>
+
+        <textarea name="reason" required></textarea>
+
+        <button type="submit">Book Appointment</button>
+    </form>
+
+</div>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+>>>> doctor_dashboard.html
+
+
+{% extends 'base.html' %}
+
+{% block content %}
+
+<h1>Doctor Dashboard</h1>
+
+<h2>Patient Appointments</h2>
+
+<table>
+    <tr>
+        <th>Patient</th>
+        <th>Age</th>
+        <th>Phone</th>
+        <th>Date</th>
+        <th>Reason</th>
+        <th>Status</th>
+        <th>Action</th>
+    </tr>
+
+    {% for a in appointments %}
+
+    <tr>
+        <td>{{ a.patient.user.username }}</td>
+        <td>{{ a.patient.age }}</td>
+        <td>{{ a.patient.phone }}</td>
+        <td>{{ a.appointment_date }}</td>
+        <td>{{ a.reason }}</td>
+        <td>{{ a.status }}</td>
+
+        <td>
+            {% if a.status == 'Pending' %}
+
+            <form method="POST"
+                  action="{% url 'update_status' a.id %}">
+                {% csrf_token %}
+
+                <select name="status">
+                    <option value="Approved">Approve</option>
+                    <option value="Rejected">Reject</option>
+                </select>
+
+                <button type="submit">Update</button>
+            </form>
+
+            {% elif a.status == 'Approved' %}
+
+            <form method="POST"
+                  action="{% url 'update_status' a.id %}">
+                {% csrf_token %}
+
+                <input type="hidden"
+                       name="status"
+                       value="Completed">
+
+                <button type="submit">Complete</button>
+            </form>
+
+            {% else %}
+                No action
+            {% endif %}
+        </td>
+    </tr>
+
+    {% empty %}
+    <tr><td colspan="7">No appointments found.</td></tr>
+    {% endfor %}
+
+</table>
+
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+>>>>> css
+
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: #f2f6fc;
+    color: #333;
+}
+
+.navbar {
+    background: #0879c9;
+    color: white;
+    padding: 18px 5%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.navbar h2 {
+    font-size: 23px;
+}
+
+.navbar a {
+    color: white;
+    text-decoration: none;
+}
+
+.logout {
+    background: #e74c3c;
+    padding: 9px 15px;
+    border-radius: 5px;
+    margin-left: 15px;
+}
+
+.container {
+    width: 90%;
+    max-width: 1200px;
+    margin: 35px auto;
+    min-height: 75vh;
+}
+
+h1, h2 {
+    margin-bottom: 20px;
+    color: #0879c9;
+}
+
+h2 {
+    margin-top: 25px;
+}
+
+.form-box {
+    background: white;
+    max-width: 480px;
+    margin: 30px auto;
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+.form-box h2 {
+    text-align: center;
+    margin-top: 0;
+}
+
+label {
+    display: block;
+    margin: 12px 0 6px;
+    font-weight: bold;
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: 11px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    margin-bottom: 10px;
+}
+
+textarea {
+    min-height: 90px;
+    resize: vertical;
+}
+
+button, .btn {
+    background: #0879c9;
+    color: white;
+    border: none;
+    padding: 11px 18px;
+    border-radius: 5px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    margin: 10px 0;
+}
+
+button:hover, .btn:hover {
+    background: #075b99;
+}
+
+.danger {
+    background: #dc3545;
+}
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    margin: 25px 0;
+}
+
+.card {
+    background: white;
+    padding: 25px;
+    border-radius: 10px;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+    text-align: center;
+}
+
+.card h2 {
+    font-size: 32px;
+    margin-top: 15px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    margin: 20px 0 35px;
+    overflow-wrap: anywhere;
+}
+
+th, td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+
+th {
+    background: #0879c9;
+    color: white;
+}
+
+tr:nth-child(even) {
+    background: #f7faff;
+}
+
+.message {
+    background: #d8f3dc;
+    color: #176b35;
+    padding: 13px;
+    margin-bottom: 15px;
+    border-radius: 5px;
+}
+
+footer {
+    background: #0879c9;
+    color: white;
+    text-align: center;
+    padding: 18px;
+}
+
+@media (max-width: 768px) {
+    .cards {
+        grid-template-columns: 1fr;
+    }
+
+    .container {
+        width: 95%;
+    }
+
+    table {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    .navbar {
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+>>>>> javascript
+
+
+document.addEventListener("DOMContentLoaded", function () {
+
+    // Prevent selecting past appointment dates
+    const dateInput = document.getElementById("appointment_date");
+
+    if (dateInput) {
+        const today = new Date();
+        const localDate = new Date(
+            today.getTime() - today.getTimezoneOffset() * 60000
+        ).toISOString().split("T")[0];
+
+        dateInput.min = localDate;
+    }
+
+    // Confirm appointment cancellation
+    const cancelForms = document.querySelectorAll(
+        'form[action*="cancel-appointment"]'
+    );
+
+    cancelForms.forEach(function (form) {
+        form.addEventListener("submit", function (event) {
+            const confirmed = confirm(
+                "Are you sure you want to cancel this appointment?"
+            );
+
+            if (!confirmed) {
+                event.preventDefault();
+            }
+        });
+    });
+
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+python manage.py makemigrations
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py runserver
